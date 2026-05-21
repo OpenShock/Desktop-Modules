@@ -35,6 +35,7 @@ public sealed class ForzaShockModule : DesktopModuleBase
 
         ModuleServiceProvider = services.BuildServiceProvider();
 
-        ModuleServiceProvider.GetRequiredService<TelemetryListener>().Start();
+        if (config.Config.AutoStart)
+            ModuleServiceProvider.GetRequiredService<TelemetryListener>().Start();
     }
 }

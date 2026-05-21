@@ -5,6 +5,7 @@ namespace OpenShock.Desktop.Modules.ForzaShock;
 public sealed class ForzaShockModuleConfig
 {
     public int UdpPort { get; set; } = 5300;
+    public bool AutoStart { get; set; } = false;
     public bool Diagnostics { get; set; } = false;
 
     public CollisionConfig Collision { get; set; } = new();

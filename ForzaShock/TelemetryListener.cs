@@ -44,20 +44,7 @@ public sealed class TelemetryListener : IAsyncDisposable
 
     public void Start()
     {
-        if (_loop is { IsCompleted: false })
-        {
-            _log.LogInformation("Start() called but listener is already running; ignoring.");
-            return;
-        }
-
-        var c = _config.Config;
-        _log.LogInformation(
-            "Start(): port={Port} diagnostics={Diag} wall=(count={WallCount} action={WallAction}) smashable=(count={SmashCount} action={SmashAction}) thresholds: velDiff>={Vd} accelJump>={Aj} minSpeed={Ms}km/h cooldown={Cd}ms",
-            c.UdpPort, c.Diagnostics,
-            c.Wall.ShockerIds.Count, c.Wall.Action,
-            c.Smashable.ShockerIds.Count, c.Smashable.Action,
-            c.Collision.SmashableVelDiffThreshold, c.Collision.AccelMagnitudeJumpThreshold,
-            c.Collision.MinSpeedKmh, c.Collision.CooldownMs);
+        if (_loop is { IsCompleted: false }) return;
 
         _cts = new CancellationTokenSource();
         _loop = Task.Run(() => RunAsync(_cts.Token));
@@ -88,8 +75,7 @@ public sealed class TelemetryListener : IAsyncDisposable
         {
             socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
             socket.Bind(new IPEndPoint(IPAddress.Any, cfg.UdpPort));
-            _log.LogInformation("ForzaShock listening on UDP :{Port} diagnostics={Diag}",
-                cfg.UdpPort, cfg.Diagnostics);
+            _log.LogInformation("Listening on UDP :{Port} (diagnostics={Diag})", cfg.UdpPort, cfg.Diagnostics);
 
             while (!ct.IsCancellationRequested)
             {
@@ -123,22 +109,11 @@ public sealed class TelemetryListener : IAsyncDisposable
                     LastReason = hit.Reason;
                     LastDetectionAt = DateTimeOffset.Now;
                     var profile = hit.Kind == CollisionKind.Wall ? cfg.Wall : cfg.Smashable;
-                    _log.LogInformation("Collision: {Kind} {Reason} -> intensity={I:P0} (diagnostics={Diag})",
-                        hit.Kind, hit.Reason, hit.Intensity01, cfg.Diagnostics);
+                    _log.LogInformation("Collision: {Kind} {Reason} -> intensity={I:P0}{Dry}",
+                        hit.Kind, hit.Reason, hit.Intensity01, cfg.Diagnostics ? " [DRY-RUN]" : "");
 
-                    if (cfg.Diagnostics)
-                    {
-                        _log.LogInformation(
-                            "[DRY-RUN] diagnostics=true, NOT firing. Toggle off in UI to enable. " +
-                            "Would have sent ({Kind}): shockers={Count} action={Action} intensity~={I} duration={Dur}ms",
-                            hit.Kind, profile.ShockerIds.Count, profile.Action,
-                            (byte)Math.Clamp((int)MathF.Round(profile.MinIntensity + hit.Intensity01 * (profile.MaxIntensity - profile.MinIntensity)), 1, 100),
-                            profile.DurationMs);
-                    }
-                    else
-                    {
+                    if (!cfg.Diagnostics)
                         await FireAsync(hit.Intensity01, profile);
-                    }
                 }
 
                 if (PacketsReceived % 30 == 0 || detection is not null)
@@ -159,12 +134,9 @@ public sealed class TelemetryListener : IAsyncDisposable
 
     private async Task FireAsync(float intensity01, ShockConfig s)
     {
-        _log.LogInformation("FireAsync entry: intensity01={I01} shockerCount={Count} action={Action} min={Min} max={Max} duration={Dur}ms",
-            intensity01, s.ShockerIds.Count, s.Action, s.MinIntensity, s.MaxIntensity, s.DurationMs);
-
         if (s.ShockerIds.Count == 0)
         {
-            _log.LogWarning("FireAsync: no shocker IDs configured; SKIPPING. Tick at least one shocker in the ForzaShock UI under 'Shockers to fire'.");
+            _log.LogWarning("No shockers configured for this profile; skipping.");
             LastError = "No shocker IDs configured";
             return;
         }
@@ -173,9 +145,6 @@ public sealed class TelemetryListener : IAsyncDisposable
             (int)MathF.Round(s.MinIntensity + intensity01 * (s.MaxIntensity - s.MinIntensity)),
             1, 100);
         ushort duration = (ushort)Math.Clamp((int)s.DurationMs, 300, 30000);
-
-        _log.LogInformation("FireAsync: scaled intensity={Intensity}/100 duration={Duration}ms; sending to {Count} shocker(s): [{Ids}]",
-            intensity, duration, s.ShockerIds.Count, string.Join(", ", s.ShockerIds));
 
         var shocks = s.ShockerIds.Select(id => new ShockerControl
         {
@@ -188,25 +157,14 @@ public sealed class TelemetryListener : IAsyncDisposable
 
         try
         {
-            var sw = System.Diagnostics.Stopwatch.StartNew();
             await _control.Control(shocks, "ForzaShock collision");
-            sw.Stop();
-            _log.LogInformation("FireAsync: IOpenShockControl.Control returned in {Ms}ms (host accepted the command — host-side logs/Discord/hub status will show whether it reached the shocker)",
-                sw.ElapsedMilliseconds);
             LastError = null;
         }
         catch (Exception ex)
         {
-            _log.LogError(ex, "FireAsync: IOpenShockControl.Control threw: {Msg}", ex.Message);
+            _log.LogError(ex, "Control call failed: {Msg}", ex.Message);
             LastError = ex.Message;
         }
-    }
-
-    public Task TestFireAsync(CollisionKind kind, float intensity01 = 0.5f)
-    {
-        var profile = kind == CollisionKind.Wall ? _config.Config.Wall : _config.Config.Smashable;
-        _log.LogInformation("TestFireAsync invoked (kind={Kind} intensity01={I01}) — bypasses detection & diagnostics flag", kind, intensity01);
-        return FireAsync(intensity01, profile);
     }
 
     public async ValueTask DisposeAsync() => await StopAsync();

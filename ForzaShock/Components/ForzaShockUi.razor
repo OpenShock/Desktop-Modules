@@ -64,31 +64,23 @@
 
     <MudPaper Class="pa-4" Outlined="true">
         <MudText Typo="Typo.h6" Class="mb-2">General</MudText>
-        <MudNumericField T="int" @bind-Value="Config.Config.UdpPort" Label="UDP Port" Min="1" Max="65535" />
-        <MudSwitch @bind-Value="Config.Config.Diagnostics" Label="Diagnostics mode (no shocks sent)" Color="Color.Warning" Class="mt-2" />
+        <MudNumericField T="int" @bind-Value="Config.Config.UdpPort" @bind-Value:after="SaveDebounced" Label="UDP Port" Min="1" Max="65535" />
+        <MudSwitch @bind-Value="Config.Config.AutoStart" @bind-Value:after="SaveDebounced" Label="Auto-start on launch" Color="Color.Primary" Class="mt-2" />
+        <MudSwitch @bind-Value="Config.Config.Diagnostics" @bind-Value:after="SaveDebounced" Label="Diagnostics mode (no shocks sent)" Color="Color.Warning" Class="mt-2" />
     </MudPaper>
 
     <MudPaper Class="pa-4" Outlined="true">
         <MudText Typo="Typo.h6" Class="mb-2">Collision thresholds</MudText>
-        <MudNumericField T="float" @bind-Value="Config.Config.Collision.SmashableVelDiffThreshold" Label="Smashable VelDiff threshold (m/s)" Step="0.1f" />
-        <MudNumericField T="float" @bind-Value="Config.Config.Collision.AccelMagnitudeJumpThreshold" Label="Accel magnitude jump threshold (m/s²)" Step="1f" Class="mt-2" />
-        <MudNumericField T="float" @bind-Value="Config.Config.Collision.MinSpeedKmh" Label="Min speed (km/h)" Step="1f" Class="mt-2" />
-        <MudNumericField T="int" @bind-Value="Config.Config.Collision.CooldownMs" Label="Cooldown (ms)" Step="50" Class="mt-2" />
-        <MudNumericField T="float" @bind-Value="Config.Config.Collision.MaxIntensitySmashableVelDiff" Label="Full intensity at velDiff (m/s)" Step="0.5f" Class="mt-2" />
-        <MudNumericField T="float" @bind-Value="Config.Config.Collision.MaxIntensityAccelMagJump" Label="Full intensity at accel jump (m/s²)" Step="5f" Class="mt-2" />
+        <MudNumericField T="float" @bind-Value="Config.Config.Collision.SmashableVelDiffThreshold" @bind-Value:after="SaveDebounced" Label="Smashable VelDiff threshold (m/s)" Step="0.1f" />
+        <MudNumericField T="float" @bind-Value="Config.Config.Collision.AccelMagnitudeJumpThreshold" @bind-Value:after="SaveDebounced" Label="Accel magnitude jump threshold (m/s²)" Step="1f" Class="mt-2" />
+        <MudNumericField T="float" @bind-Value="Config.Config.Collision.MinSpeedKmh" @bind-Value:after="SaveDebounced" Label="Min speed (km/h)" Step="1f" Class="mt-2" />
+        <MudNumericField T="int" @bind-Value="Config.Config.Collision.CooldownMs" @bind-Value:after="SaveDebounced" Label="Cooldown (ms)" Step="50" Class="mt-2" />
+        <MudNumericField T="float" @bind-Value="Config.Config.Collision.MaxIntensitySmashableVelDiff" @bind-Value:after="SaveDebounced" Label="Full intensity at velDiff (m/s)" Step="0.5f" Class="mt-2" />
+        <MudNumericField T="float" @bind-Value="Config.Config.Collision.MaxIntensityAccelMagJump" @bind-Value:after="SaveDebounced" Label="Full intensity at accel jump (m/s²)" Step="5f" Class="mt-2" />
     </MudPaper>
 
     @RenderShockProfile("Wall hits (hard impacts)", Config.Config.Wall)
     @RenderShockProfile("Smashables (cones, fences, etc.)", Config.Config.Smashable)
-
-    <MudStack Row="true" Spacing="2">
-        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveAsync">Save config</MudButton>
-        <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="@(() => TestFireAsync(CollisionKind.Wall))">Test wall (50%)</MudButton>
-        <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="@(() => TestFireAsync(CollisionKind.Smashable))">Test smashable (50%)</MudButton>
-        <MudText Typo="Typo.body2" Class="mud-text-secondary align-self-center">
-            Test fire bypasses detection AND the Diagnostics flag.
-        </MudText>
-    </MudStack>
 </MudStack>
 
 @code {
@@ -273,60 +265,73 @@ function clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
             _allShockers.AddRange(hub.Shockers);
     }
 
-    private void ToggleShocker(ShockConfig profile, Guid id, bool on)
+    private void UpdateShockerIds(ShockConfig profile, IEnumerable<Guid> selected)
     {
-        if (on && !profile.ShockerIds.Contains(id))
-            profile.ShockerIds.Add(id);
-        else if (!on)
-            profile.ShockerIds.Remove(id);
+        profile.ShockerIds.Clear();
+        profile.ShockerIds.AddRange(selected);
+        SaveDebounced();
     }
 
-    private async Task SaveAsync() => await Config.Save();
-
-    private async Task TestFireAsync(CollisionKind kind)
+    private string FormatSelectedShockers(ShockConfig profile)
     {
-        await Config.Save();
-        await Listener.TestFireAsync(kind);
+        if (profile.ShockerIds.Count == 0) return string.Empty;
+        var names = profile.ShockerIds
+            .Select(id => _allShockers.FirstOrDefault(s => s.Id == id)?.Name ?? id.ToString())
+            .ToArray();
+        return names.Length <= 3
+            ? string.Join(", ", names)
+            : $"{names.Length} selected";
+    }
+
+    private System.Threading.Timer? _saveDebounceTimer;
+
+    private void SaveDebounced()
+    {
+        _saveDebounceTimer ??= new System.Threading.Timer(async _ =>
+        {
+            try { await Config.Save(); }
+            catch { /* swallow — next change will retry */ }
+        });
+        _saveDebounceTimer.Change(500, Timeout.Infinite);
     }
 
     private RenderFragment RenderShockProfile(string title, ShockConfig profile) => __builder =>
     {
         <MudPaper Class="pa-4" Outlined="true">
             <MudText Typo="Typo.h6" Class="mb-2">@title</MudText>
-            <MudSelect T="ControlType" @bind-Value="profile.Action" Label="Action">
+            <MudSelect T="ControlType" @bind-Value="profile.Action" @bind-Value:after="SaveDebounced" Label="Action">
                 @foreach (var ct in Enum.GetValues<ControlType>())
                 {
                     <MudSelectItem Value="ct">@ct</MudSelectItem>
                 }
             </MudSelect>
-            <MudNumericField T="byte" @bind-Value="profile.MinIntensity" Label="Min intensity (1-100)" Min="1" Max="100" Class="mt-2" />
-            <MudNumericField T="byte" @bind-Value="profile.MaxIntensity" Label="Max intensity (1-100)" Min="1" Max="100" Class="mt-2" />
-            <MudNumericField T="ushort" @bind-Value="profile.DurationMs" Label="Duration (ms, 300-30000)" Min="300" Max="30000" Class="mt-2" />
+            <MudNumericField T="byte" @bind-Value="profile.MinIntensity" @bind-Value:after="SaveDebounced" Label="Min intensity (1-100)" Min="1" Max="100" Class="mt-2" />
+            <MudNumericField T="byte" @bind-Value="profile.MaxIntensity" @bind-Value:after="SaveDebounced" Label="Max intensity (1-100)" Min="1" Max="100" Class="mt-2" />
+            <MudNumericField T="ushort" @bind-Value="profile.DurationMs" @bind-Value:after="SaveDebounced" Label="Duration (ms, 300-30000)" Min="300" Max="30000" Class="mt-2" />
 
-            <MudText Typo="Typo.subtitle2" Class="mt-3 mb-1">Shockers to fire</MudText>
             @if (_allShockers.Count == 0)
             {
-                <MudText Typo="Typo.body2" Class="mud-text-secondary">No shockers visible. Make sure a hub is connected.</MudText>
+                <MudText Typo="Typo.body2" Class="mt-3 mud-text-secondary">No shockers visible. Make sure a hub is connected.</MudText>
             }
             else
             {
-                foreach (var shocker in _allShockers)
-                {
-                    bool selected = profile.ShockerIds.Contains(shocker.Id);
-                    <MudCheckBox T="bool" Value="selected"
-                                 ValueChanged="@(v => ToggleShocker(profile, shocker.Id, v))"
-                                 Label="@($"{shocker.Name}  ({shocker.Id})")" />
-                }
+                <MudSelect T="Guid" Label="Shockers to fire" MultiSelection="true"
+                           SelectedValues="new HashSet<Guid>(profile.ShockerIds)"
+                           SelectedValuesChanged="@(vals => UpdateShockerIds(profile, vals))"
+                           MultiSelectionTextFunc="@(names => FormatSelectedShockers(profile))"
+                           AnchorOrigin="Origin.BottomCenter"
+                           Class="mt-3"
+                           Style="max-width: 360px;">
+                    @foreach (var shocker in _allShockers)
+                    {
+                        <MudSelectItem T="Guid" Value="@shocker.Id">@shocker.Name</MudSelectItem>
+                    }
+                </MudSelect>
             }
         </MudPaper>
     };
 
-    private async Task StartAsync()
-    {
-        await Config.Save();
-        Listener.Start();
-    }
-
+    private void StartAsync() => Listener.Start();
     private Task StopAsync() => Listener.StopAsync();
 
     private void OnStateChanged() => InvokeAsync(StateHasChanged);
@@ -335,6 +340,11 @@ function clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
     {
         Listener.StateChanged -= OnStateChanged;
         Listener.SampleAdded -= OnSampleAdded;
+        if (_saveDebounceTimer is not null)
+        {
+            await _saveDebounceTimer.DisposeAsync();
+            try { await Config.Save(); } catch { }
+        }
         var module = _graphModule;
         _graphModule = null;
         if (module is not null)
