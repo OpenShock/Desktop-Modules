@@ -8,6 +8,16 @@
     <OutputType>Library</OutputType>
     <AssemblyName>OpenShock.Desktop.Modules.ForzaShock</AssemblyName>
     <RootNamespace>OpenShock.Desktop.Modules.ForzaShock</RootNamespace>
+    <EnableDefaultCssItems>false</EnableDefaultCssItems>
+    <ApplicationTitle>Sentry</ApplicationTitle>
+
+    <AssemblyVersion>1.0.0</AssemblyVersion>
+    <Version>1.0.0</Version>
+
+    <ResourceLanguages>en</ResourceLanguages>
+    <SatelliteResourceLanguages>en-US;en</SatelliteResourceLanguages>
+    <IsPackable>false</IsPackable>
+    <Platforms>AnyCPU</Platforms>
   </PropertyGroup>
 
   <ItemGroup>
@@ -19,11 +29,6 @@
   <ItemGroup>
     <None Remove="Icon.svg" />
     <EmbeddedResource Include="Icon.svg" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Compile Remove="Program.cs.bak" />
-    <None Include="Program.cs.bak" />
   </ItemGroup>
 
   <Target Name="CopyModuleToDesktop" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">
