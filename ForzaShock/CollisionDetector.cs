@@ -16,7 +16,8 @@ public sealed class CollisionDetector
     private bool _wasRaceOn;
     private bool _swallowNextFrame;
     private float _lastAccelMag;
-    private long _cooldownUntilTicks;
+    private long _wallCooldownUntilTicks;
+    private long _smashableCooldownUntilTicks;
 
     public CollisionDetector(CollisionConfig cfg, TimeProvider? time = null)
     {
@@ -53,12 +54,11 @@ public sealed class CollisionDetector
         }
 
         long nowTicks = _time.GetUtcNow().UtcTicks;
-        if (nowTicks < _cooldownUntilTicks) return null;
         if (frame.SpeedKmh < _cfg.MinSpeedKmh) return null;
 
         float velDiff = MathF.Abs(frame.SmashableVelDiff);
-        bool smashableHit = velDiff >= _cfg.SmashableVelDiffThreshold;
-        bool accelSpike = accelJump >= _cfg.AccelMagnitudeJumpThreshold;
+        bool smashableHit = velDiff >= _cfg.SmashableVelDiffThreshold && nowTicks >= _smashableCooldownUntilTicks;
+        bool accelSpike = accelJump >= _cfg.AccelMagnitudeJumpThreshold && nowTicks >= _wallCooldownUntilTicks;
         if (!smashableHit && !accelSpike) return null;
 
         float intensity;
@@ -78,7 +78,11 @@ public sealed class CollisionDetector
             kind = CollisionKind.Wall;
         }
 
-        _cooldownUntilTicks = nowTicks + TimeSpan.FromMilliseconds(_cfg.CooldownMs).Ticks;
+        long cooldownTicks = TimeSpan.FromMilliseconds(_cfg.CooldownMs).Ticks;
+        if (kind == CollisionKind.Wall)
+            _wallCooldownUntilTicks = nowTicks + cooldownTicks;
+        else
+            _smashableCooldownUntilTicks = nowTicks + cooldownTicks;
         return new Detection(intensity, reason, kind);
     }
 }

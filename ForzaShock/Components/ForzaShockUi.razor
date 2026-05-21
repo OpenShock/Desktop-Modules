@@ -302,7 +302,6 @@ function clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
             <MudNumericField T="byte" @bind-Value="profile.MinIntensity" Label="Min intensity (1-100)" Min="1" Max="100" Class="mt-2" />
             <MudNumericField T="byte" @bind-Value="profile.MaxIntensity" Label="Max intensity (1-100)" Min="1" Max="100" Class="mt-2" />
             <MudNumericField T="ushort" @bind-Value="profile.DurationMs" Label="Duration (ms, 300-30000)" Min="300" Max="30000" Class="mt-2" />
-            <MudSwitch @bind-Value="profile.Exclusive" Label="Exclusive" Color="Color.Primary" Class="mt-2" />
 
             <MudText Typo="Typo.subtitle2" Class="mt-3 mb-1">Shockers to fire</MudText>
             @if (_allShockers.Count == 0)

@@ -82,24 +82,26 @@ public sealed class TelemetryListener : IAsyncDisposable
     private async Task RunAsync(CancellationToken ct)
     {
         var cfg = _config.Config;
-        UdpClient? udp = null;
+        Socket? socket = null;
+        var buffer = new byte[ForzaPacket.PacketSize];
         try
         {
-            udp = new UdpClient(new IPEndPoint(IPAddress.Any, cfg.UdpPort));
+            socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            socket.Bind(new IPEndPoint(IPAddress.Any, cfg.UdpPort));
             _log.LogInformation("ForzaShock listening on UDP :{Port} diagnostics={Diag}",
                 cfg.UdpPort, cfg.Diagnostics);
 
             while (!ct.IsCancellationRequested)
             {
-                UdpReceiveResult result;
-                try { result = await udp.ReceiveAsync(ct); }
+                int received;
+                try { received = await socket.ReceiveAsync(buffer, SocketFlags.None, ct); }
                 catch (OperationCanceledException) { break; }
 
-                if (!ForzaPacket.TryParse(result.Buffer, out var frame))
+                if (!ForzaPacket.TryParse(buffer.AsSpan(0, received), out var frame))
                 {
                     if (PacketsReceived == 0)
                         _log.LogWarning("First UDP packet was {Len} bytes (expected {Expected})",
-                            result.Buffer.Length, ForzaPacket.PacketSize);
+                            received, ForzaPacket.PacketSize);
                     continue;
                 }
 
@@ -128,10 +130,10 @@ public sealed class TelemetryListener : IAsyncDisposable
                     {
                         _log.LogInformation(
                             "[DRY-RUN] diagnostics=true, NOT firing. Toggle off in UI to enable. " +
-                            "Would have sent ({Kind}): shockers={Count} action={Action} intensity~={I} duration={Dur}ms exclusive={Excl}",
+                            "Would have sent ({Kind}): shockers={Count} action={Action} intensity~={I} duration={Dur}ms",
                             hit.Kind, profile.ShockerIds.Count, profile.Action,
                             (byte)Math.Clamp((int)MathF.Round(profile.MinIntensity + hit.Intensity01 * (profile.MaxIntensity - profile.MinIntensity)), 1, 100),
-                            profile.DurationMs, profile.Exclusive);
+                            profile.DurationMs);
                     }
                     else
                     {
@@ -150,15 +152,15 @@ public sealed class TelemetryListener : IAsyncDisposable
         }
         finally
         {
-            udp?.Dispose();
+            socket?.Dispose();
             StateChanged?.Invoke();
         }
     }
 
     private async Task FireAsync(float intensity01, ShockConfig s)
     {
-        _log.LogInformation("FireAsync entry: intensity01={I01} shockerCount={Count} action={Action} min={Min} max={Max} duration={Dur}ms exclusive={Excl}",
-            intensity01, s.ShockerIds.Count, s.Action, s.MinIntensity, s.MaxIntensity, s.DurationMs, s.Exclusive);
+        _log.LogInformation("FireAsync entry: intensity01={I01} shockerCount={Count} action={Action} min={Min} max={Max} duration={Dur}ms",
+            intensity01, s.ShockerIds.Count, s.Action, s.MinIntensity, s.MaxIntensity, s.DurationMs);
 
         if (s.ShockerIds.Count == 0)
         {
@@ -181,7 +183,7 @@ public sealed class TelemetryListener : IAsyncDisposable
             Type = s.Action,
             Intensity = intensity,
             Duration = duration,
-            Exclusive = s.Exclusive,
+            Exclusive = true,
         }).ToList();
 
         try
