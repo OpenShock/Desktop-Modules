@@ -1,0 +1,353 @@
+@using MudBlazor
+@using Microsoft.JSInterop
+@using OpenShock.Desktop.ModuleBase
+@using OpenShock.Desktop.ModuleBase.Api
+@using OpenShock.Desktop.ModuleBase.Config
+@using OpenShock.Desktop.ModuleBase.Models
+@using OpenShock.Desktop.ModuleBase.StableInterfaces
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<MudStack Spacing="3" Class="pa-4">
+    <MudText Typo="Typo.h5">ForzaShock</MudText>
+    <MudText Typo="Typo.body2" Class="mud-text-secondary">
+        Forza Horizon 6 telemetry → OpenShock. Enable "Data Out" in FH6 (HUD &amp; GAMEPLAY),
+        target 127.0.0.1 on the configured port.
+    </MudText>
+
+    <MudPaper Class="pa-4" Outlined="true">
+        <MudStack Row="true" Spacing="3" AlignItems="AlignItems.Center">
+            <MudIcon Icon="@(Listener.IsRunning ? Icons.Material.Filled.PlayCircle : Icons.Material.Filled.StopCircle)"
+                     Color="@(Listener.IsRunning ? Color.Success : Color.Default)" />
+            <MudText>
+                @(Listener.IsRunning ? "Listening" : "Stopped")
+                — packets: <b>@Listener.PacketsReceived</b>,
+                detections: <b>@Listener.DetectionsFired</b>
+            </MudText>
+            <MudSpacer />
+            @if (Listener.IsRunning)
+            {
+                <MudButton Variant="Variant.Outlined" Color="Color.Warning" OnClick="StopAsync">Stop</MudButton>
+            }
+            else
+            {
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="StartAsync">Start</MudButton>
+            }
+        </MudStack>
+
+        @if (Listener.LastFrame is { } f)
+        {
+            <MudText Typo="Typo.body2" Class="mt-2">
+                RaceOn=@f.RaceOn  speed=@f.SpeedKmh.ToString("F1") km/h
+                accel=@f.AccelMagnitude.ToString("F1")  velDiff=@f.SmashableVelDiff.ToString("F2")
+            </MudText>
+        }
+        @if (Listener.LastReason is not null)
+        {
+            <MudText Typo="Typo.body2" Color="Color.Info" Class="mt-1">
+                Last: @Listener.LastReason  (@(Listener.LastDetectionAt?.ToLocalTime().ToString("HH:mm:ss")))
+            </MudText>
+        }
+        @if (Listener.LastError is not null)
+        {
+            <MudText Typo="Typo.body2" Color="Color.Error" Class="mt-1">Error: @Listener.LastError</MudText>
+        }
+    </MudPaper>
+
+    <MudPaper Class="pa-4" Outlined="true">
+        <MudText Typo="Typo.h6" Class="mb-2">Live telemetry (last 30s)</MudText>
+        <canvas @ref="_canvas" style="width:100%;height:220px;background:#1a1a1a;border-radius:4px;display:block;"></canvas>
+        <MudText Typo="Typo.caption" Class="mud-text-secondary">
+            Orange = AccelMagnitude. Blue = SmashableVelDiff. Dashed lines are detection thresholds.
+        </MudText>
+    </MudPaper>
+
+    <MudPaper Class="pa-4" Outlined="true">
+        <MudText Typo="Typo.h6" Class="mb-2">General</MudText>
+        <MudNumericField T="int" @bind-Value="Config.Config.UdpPort" Label="UDP Port" Min="1" Max="65535" />
+        <MudSwitch @bind-Value="Config.Config.Diagnostics" Label="Diagnostics mode (no shocks sent)" Color="Color.Warning" Class="mt-2" />
+    </MudPaper>
+
+    <MudPaper Class="pa-4" Outlined="true">
+        <MudText Typo="Typo.h6" Class="mb-2">Collision thresholds</MudText>
+        <MudNumericField T="float" @bind-Value="Config.Config.Collision.SmashableVelDiffThreshold" Label="Smashable VelDiff threshold (m/s)" Step="0.1f" />
+        <MudNumericField T="float" @bind-Value="Config.Config.Collision.AccelMagnitudeJumpThreshold" Label="Accel magnitude jump threshold (m/s²)" Step="1f" Class="mt-2" />
+        <MudNumericField T="float" @bind-Value="Config.Config.Collision.MinSpeedKmh" Label="Min speed (km/h)" Step="1f" Class="mt-2" />
+        <MudNumericField T="int" @bind-Value="Config.Config.Collision.CooldownMs" Label="Cooldown (ms)" Step="50" Class="mt-2" />
+        <MudNumericField T="float" @bind-Value="Config.Config.Collision.MaxIntensitySmashableVelDiff" Label="Full intensity at velDiff (m/s)" Step="0.5f" Class="mt-2" />
+        <MudNumericField T="float" @bind-Value="Config.Config.Collision.MaxIntensityAccelMagJump" Label="Full intensity at accel jump (m/s²)" Step="5f" Class="mt-2" />
+    </MudPaper>
+
+    @RenderShockProfile("Wall hits (hard impacts)", Config.Config.Wall)
+    @RenderShockProfile("Smashables (cones, fences, etc.)", Config.Config.Smashable)
+
+    <MudStack Row="true" Spacing="2">
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" OnClick="SaveAsync">Save config</MudButton>
+        <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="@(() => TestFireAsync(CollisionKind.Wall))">Test wall (50%)</MudButton>
+        <MudButton Variant="Variant.Outlined" Color="Color.Secondary" OnClick="@(() => TestFireAsync(CollisionKind.Smashable))">Test smashable (50%)</MudButton>
+        <MudText Typo="Typo.body2" Class="mud-text-secondary align-self-center">
+            Test fire bypasses detection AND the Diagnostics flag.
+        </MudText>
+    </MudStack>
+</MudStack>
+
+@code {
+    [ModuleInject] private TelemetryListener Listener { get; set; } = null!;
+    [ModuleInject] private IModuleConfig<ForzaShockModuleConfig> Config { get; set; } = null!;
+    [ModuleInject] private IOpenShockService OpenShock { get; set; } = null!;
+
+    private readonly List<IOpenShockShocker> _allShockers = new();
+    private ElementReference _canvas;
+    private IJSObjectReference? _graphModule;
+    private float _lastAccelThresh;
+    private float _lastVelThresh;
+
+    protected override void OnInitialized()
+    {
+        Listener.StateChanged += OnStateChanged;
+        Listener.SampleAdded += OnSampleAdded;
+        RefreshShockers();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            var b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(GraphScript));
+            _graphModule = await JS.InvokeAsync<IJSObjectReference>("import", $"data:text/javascript;base64,{b64}");
+            _lastAccelThresh = Config.Config.Collision.AccelMagnitudeJumpThreshold;
+            _lastVelThresh = Config.Config.Collision.SmashableVelDiffThreshold;
+            await _graphModule.InvokeVoidAsync("init", _canvas, _lastAccelThresh, _lastVelThresh);
+        }
+        else if (_graphModule is not null)
+        {
+            var a = Config.Config.Collision.AccelMagnitudeJumpThreshold;
+            var v = Config.Config.Collision.SmashableVelDiffThreshold;
+            if (a != _lastAccelThresh || v != _lastVelThresh)
+            {
+                _lastAccelThresh = a;
+                _lastVelThresh = v;
+                await _graphModule.InvokeVoidAsync("setThresholds", a, v);
+            }
+        }
+    }
+
+    private async void OnSampleAdded(TelemetrySample sample)
+    {
+        var module = _graphModule;
+        if (module is null) return;
+        try { await module.InvokeVoidAsync("push", sample.AccelMagnitude, sample.VelDiff); }
+        catch (JSDisconnectedException) { }
+        catch (ObjectDisposedException) { }
+        catch (TaskCanceledException) { }
+    }
+
+    private const string GraphScript = @"
+let canvas, ctx, accelThresh = 0, velThresh = 0, dpr = 1;
+const CAP = 300;
+const accelBuf = new Float32Array(CAP);
+const velBuf = new Float32Array(CAP);
+let head = 0, count = 0;
+let rafScheduled = false;
+let resizeObs = null;
+
+export function init(canvasEl, aThresh, vThresh) {
+    canvas = canvasEl;
+    accelThresh = aThresh;
+    velThresh = vThresh;
+    resize();
+    resizeObs = new ResizeObserver(resize);
+    resizeObs.observe(canvas);
+    schedule();
+}
+
+export function setThresholds(aThresh, vThresh) {
+    accelThresh = aThresh;
+    velThresh = vThresh;
+    schedule();
+}
+
+export function push(a, v) {
+    accelBuf[head] = a;
+    velBuf[head] = v;
+    head = (head + 1) % CAP;
+    if (count < CAP) count++;
+    schedule();
+}
+
+export function dispose() {
+    if (resizeObs) { resizeObs.disconnect(); resizeObs = null; }
+    head = 0; count = 0;
+}
+
+function resize() {
+    if (!canvas) return;
+    dpr = window.devicePixelRatio || 1;
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    canvas.width = Math.max(1, Math.round(w * dpr));
+    canvas.height = Math.max(1, Math.round(h * dpr));
+    ctx = canvas.getContext('2d');
+    schedule();
+}
+
+function schedule() {
+    if (rafScheduled || !ctx) return;
+    rafScheduled = true;
+    requestAnimationFrame(draw);
+}
+
+function draw() {
+    rafScheduled = false;
+    const w = canvas.width, h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = '#1a1a1a';
+    ctx.fillRect(0, 0, w, h);
+
+    const padL = 40 * dpr, padR = 10 * dpr, padT = 10 * dpr, padB = 22 * dpr;
+    const pw = w - padL - padR, ph = h - padT - padB;
+
+    let maxA = accelThresh * 1.2, maxV = velThresh * 1.2;
+    for (let i = 0; i < count; i++) {
+        if (accelBuf[i] > maxA) maxA = accelBuf[i];
+        if (velBuf[i] > maxV) maxV = velBuf[i];
+    }
+    if (maxA <= 0) maxA = 1;
+    if (maxV <= 0) maxV = 1;
+
+    ctx.strokeStyle = '#444';
+    ctx.lineWidth = 1 * dpr;
+    ctx.strokeRect(padL, padT, pw, ph);
+
+    ctx.setLineDash([4 * dpr, 3 * dpr]);
+    ctx.globalAlpha = 0.7;
+    ctx.lineWidth = 1 * dpr;
+    ctx.strokeStyle = '#ff8a65';
+    const ay = padT + ph - clamp01(accelThresh / maxA) * ph;
+    ctx.beginPath(); ctx.moveTo(padL, ay); ctx.lineTo(padL + pw, ay); ctx.stroke();
+    ctx.strokeStyle = '#64b5f6';
+    const vy = padT + ph - clamp01(velThresh / maxV) * ph;
+    ctx.beginPath(); ctx.moveTo(padL, vy); ctx.lineTo(padL + pw, vy); ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.setLineDash([]);
+
+    drawSeries(accelBuf, maxA, '#ff7043', padL, padT, pw, ph);
+    drawSeries(velBuf, maxV, '#42a5f5', padL, padT, pw, ph);
+
+    ctx.fillStyle = '#888';
+    ctx.font = (10 * dpr) + 'px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('-30s', padL + 4, h - 6 * dpr);
+    ctx.textAlign = 'right';
+    ctx.fillText('now', padL + pw - 4, h - 6 * dpr);
+    ctx.textAlign = 'left';
+
+    ctx.font = (11 * dpr) + 'px monospace';
+    ctx.fillStyle = '#ff7043';
+    ctx.fillText('AccelMag (max ' + maxA.toFixed(1) + ')', padL + 4, padT + 14 * dpr);
+    ctx.fillStyle = '#42a5f5';
+    ctx.fillText('VelDiff (max ' + maxV.toFixed(1) + ')', padL + 4, padT + 28 * dpr);
+}
+
+function drawSeries(buf, max, color, padL, padT, pw, ph) {
+    if (count < 2) return;
+    const start = (head - count + CAP) % CAP;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.beginPath();
+    for (let i = 0; i < count; i++) {
+        const v = buf[(start + i) % CAP];
+        const x = padL + pw * i / (count - 1);
+        const y = padT + ph - clamp01(v / max) * ph;
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+}
+
+function clamp01(x) { return x < 0 ? 0 : x > 1 ? 1 : x; }
+";
+
+    private void RefreshShockers()
+    {
+        _allShockers.Clear();
+        foreach (var hub in OpenShock.Data.Hubs.Value)
+            _allShockers.AddRange(hub.Shockers);
+    }
+
+    private void ToggleShocker(ShockConfig profile, Guid id, bool on)
+    {
+        if (on && !profile.ShockerIds.Contains(id))
+            profile.ShockerIds.Add(id);
+        else if (!on)
+            profile.ShockerIds.Remove(id);
+    }
+
+    private async Task SaveAsync() => await Config.Save();
+
+    private async Task TestFireAsync(CollisionKind kind)
+    {
+        await Config.Save();
+        await Listener.TestFireAsync(kind);
+    }
+
+    private RenderFragment RenderShockProfile(string title, ShockConfig profile) => __builder =>
+    {
+        <MudPaper Class="pa-4" Outlined="true">
+            <MudText Typo="Typo.h6" Class="mb-2">@title</MudText>
+            <MudSelect T="ControlType" @bind-Value="profile.Action" Label="Action">
+                @foreach (var ct in Enum.GetValues<ControlType>())
+                {
+                    <MudSelectItem Value="ct">@ct</MudSelectItem>
+                }
+            </MudSelect>
+            <MudNumericField T="byte" @bind-Value="profile.MinIntensity" Label="Min intensity (1-100)" Min="1" Max="100" Class="mt-2" />
+            <MudNumericField T="byte" @bind-Value="profile.MaxIntensity" Label="Max intensity (1-100)" Min="1" Max="100" Class="mt-2" />
+            <MudNumericField T="ushort" @bind-Value="profile.DurationMs" Label="Duration (ms, 300-30000)" Min="300" Max="30000" Class="mt-2" />
+            <MudSwitch @bind-Value="profile.Exclusive" Label="Exclusive" Color="Color.Primary" Class="mt-2" />
+
+            <MudText Typo="Typo.subtitle2" Class="mt-3 mb-1">Shockers to fire</MudText>
+            @if (_allShockers.Count == 0)
+            {
+                <MudText Typo="Typo.body2" Class="mud-text-secondary">No shockers visible. Make sure a hub is connected.</MudText>
+            }
+            else
+            {
+                foreach (var shocker in _allShockers)
+                {
+                    bool selected = profile.ShockerIds.Contains(shocker.Id);
+                    <MudCheckBox T="bool" Value="selected"
+                                 ValueChanged="@(v => ToggleShocker(profile, shocker.Id, v))"
+                                 Label="@($"{shocker.Name}  ({shocker.Id})")" />
+                }
+            }
+        </MudPaper>
+    };
+
+    private async Task StartAsync()
+    {
+        await Config.Save();
+        Listener.Start();
+    }
+
+    private Task StopAsync() => Listener.StopAsync();
+
+    private void OnStateChanged() => InvokeAsync(StateHasChanged);
+
+    public async ValueTask DisposeAsync()
+    {
+        Listener.StateChanged -= OnStateChanged;
+        Listener.SampleAdded -= OnSampleAdded;
+        var module = _graphModule;
+        _graphModule = null;
+        if (module is not null)
+        {
+            try
+            {
+                await module.InvokeVoidAsync("dispose");
+                await module.DisposeAsync();
+            }
+            catch (JSDisconnectedException) { }
+            catch (ObjectDisposedException) { }
+            catch (TaskCanceledException) { }
+        }
+    }
+}

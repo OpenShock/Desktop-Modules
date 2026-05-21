@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <OpenShockModuleId>openshock.desktop.modules.forzashock</OpenShockModuleId>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <OutputType>Library</OutputType>
+    <AssemblyName>OpenShock.Desktop.Modules.ForzaShock</AssemblyName>
+    <RootNamespace>OpenShock.Desktop.Modules.ForzaShock</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="OpenShock.Desktop.ModuleBase" Version="1.1.4" />
+    <PackageReference Include="MudBlazor" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="Icon.svg" />
+    <EmbeddedResource Include="Icon.svg" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="Program.cs.bak" />
+    <None Include="Program.cs.bak" />
+  </ItemGroup>
+
+  <Target Name="CopyModuleToDesktop" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">
+    <PropertyGroup>
+      <ModuleDestDir>$(APPDATA)\OpenShock\Desktop\modules\openshock.desktop.modules.forzashock\</ModuleDestDir>
+    </PropertyGroup>
+    <MakeDir Directories="$(ModuleDestDir)" Condition="!Exists('$(ModuleDestDir)')" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ModuleDestDir)" />
+    <Copy SourceFiles="$(TargetDir)$(TargetName).pdb" DestinationFolder="$(ModuleDestDir)" Condition="Exists('$(TargetDir)$(TargetName).pdb')" />
+  </Target>
+
+</Project>

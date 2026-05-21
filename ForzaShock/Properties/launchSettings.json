@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "ForzaShock (deploy + run host)": {
+      "commandName": "Executable",
+      "executablePath": "%OPENSHOCK_DESKTOP_EXE%",
+      "workingDirectory": "%OPENSHOCK_DESKTOP_DIR%"
+    }
+  }
+}
